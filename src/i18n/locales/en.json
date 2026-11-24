@@ -48,6 +48,7 @@
     "new": "New arrivals"
   },
   "categories": {
+    "mobiles": { "name": "Mobiles", "desc": "Flagship, 5G, gaming, foldable & budget phones" },
     "eletronicos": { "name": "Electronics", "desc": "Gadgets, audio & computing" },
     "moda": { "name": "Fashion", "desc": "Apparel, western & ethnic wear" },
     "casa": { "name": "Home & Decor", "desc": "Kitchen, furnishings & decor" },

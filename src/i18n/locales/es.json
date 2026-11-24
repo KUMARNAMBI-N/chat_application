@@ -48,6 +48,7 @@
     "new": "Novedades"
   },
   "categories": {
+    "mobiles": { "name": "Móviles", "desc": "Smartphones 5G, plegables, gaming y económicos" },
     "eletronicos": { "name": "Electrónica", "desc": "Gadgets y dispositivos" },
     "moda": { "name": "Moda", "desc": "Ropa y accesorios" },
     "casa": { "name": "Hogar y Decoración", "desc": "Todo para tu hogar" },

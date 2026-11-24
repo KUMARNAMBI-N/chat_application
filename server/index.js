@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import jwt from 'jsonwebtoken'
@@ -11,8 +12,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'abccart_secure_jwt_secret_2026'
 app.use(cors())
 app.use(express.json())
 
-// Initialize DB schema & seed data
-initDatabase()
+// Initialize PostgreSQL DB, schema & seed data
+await initDatabase()
 
 // Auth Middleware
 function authenticateToken(req, res, next) {
@@ -56,6 +57,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     store: 'ABC Cart',
+    database: 'postgresql',
     currency: 'INR',
     locale: 'en-IN',
     timestamp: new Date().toISOString(),
@@ -65,20 +67,20 @@ app.get('/api/health', (req, res) => {
 // ----------------------------------------------------
 // Authentication Endpoints (Task 5)
 // ----------------------------------------------------
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   const { name, email, password, mobile } = req.body
 
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Name, email and password are required' })
   }
 
-  const existing = dbWrapper.get('SELECT id FROM users WHERE email = ?', [email.toLowerCase().trim()])
+  const existing = await dbWrapper.get('SELECT id FROM users WHERE email = ?', [email.toLowerCase().trim()])
   if (existing) {
     return res.status(400).json({ error: 'An account with this email already exists' })
   }
 
   const passwordHash = bcrypt.hashSync(password, 10)
-  const result = dbWrapper.run(
+  const result = await dbWrapper.run(
     'INSERT INTO users (name, email, password_hash, mobile, role) VALUES (?, ?, ?, ?, ?)',
     [name.trim(), email.toLowerCase().trim(), passwordHash, mobile ? mobile.trim() : null, 'customer']
   )
@@ -88,20 +90,20 @@ app.post('/api/auth/register', (req, res) => {
   const token = jwt.sign(user, JWT_SECRET, { expiresIn: '7d' })
 
   // Initialize wishlist & cart for new user
-  dbWrapper.run('INSERT OR IGNORE INTO wishlists (user_id) VALUES (?)', [userId])
-  dbWrapper.run('INSERT OR IGNORE INTO carts (user_id) VALUES (?)', [userId])
+  await dbWrapper.run('INSERT INTO wishlists (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING', [userId])
+  await dbWrapper.run('INSERT INTO carts (user_id) VALUES (?)', [userId])
 
   res.status(201).json({ user, token, message: 'Account registered successfully' })
 })
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' })
   }
 
-  const user = dbWrapper.get('SELECT * FROM users WHERE email = ?', [email.toLowerCase().trim()])
+  const user = await dbWrapper.get('SELECT * FROM users WHERE email = ?', [email.toLowerCase().trim()])
   if (!user) {
     return res.status(401).json({ error: 'Invalid email or password' })
   }
@@ -128,19 +130,19 @@ app.post('/api/auth/login', (req, res) => {
   })
 })
 
-app.get('/api/auth/me', authenticateToken, (req, res) => {
-  const user = dbWrapper.get('SELECT id, name, email, role, mobile, created_at FROM users WHERE id = ?', [req.user.id])
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  const user = await dbWrapper.get('SELECT id, name, email, role, mobile, created_at FROM users WHERE id = ?', [req.user.id])
   if (!user) return res.status(404).json({ error: 'User not found' })
 
-  const addresses = dbWrapper.query('SELECT * FROM addresses WHERE user_id = ? ORDER BY is_default DESC, id DESC', [req.user.id])
+  const addresses = await dbWrapper.query('SELECT * FROM addresses WHERE user_id = ? ORDER BY is_default DESC, id DESC', [req.user.id])
   res.json({ user: { ...user, addresses } })
 })
 
-app.post('/api/auth/forgot-password', (req, res) => {
+app.post('/api/auth/forgot-password', async (req, res) => {
   const { email } = req.body
   if (!email) return res.status(400).json({ error: 'Email is required' })
 
-  const user = dbWrapper.get('SELECT id, email FROM users WHERE email = ?', [email.toLowerCase().trim()])
+  const user = await dbWrapper.get('SELECT id, email FROM users WHERE email = ?', [email.toLowerCase().trim()])
   // Always return success message for security, preventing email enumeration
   res.json({
     message: user
@@ -156,15 +158,45 @@ app.post('/api/auth/logout', (req, res) => {
 // ----------------------------------------------------
 // Categories & Products Endpoints (Task 3 & 4)
 // ----------------------------------------------------
-app.get('/api/categories', (req, res) => {
-  const categories = dbWrapper.query('SELECT * FROM categories ORDER BY id ASC')
+app.get('/api/categories', async (req, res) => {
+  const categories = await dbWrapper.query('SELECT * FROM categories ORDER BY id ASC')
   res.json(categories)
 })
 
-app.get('/api/products', (req, res) => {
+app.get('/api/catalog/metadata', async (req, res) => {
+  const categories = await dbWrapper.query(
+    'SELECT id, slug, name, description FROM categories ORDER BY id ASC'
+  )
+  const brandRows = await dbWrapper.query(
+    "SELECT DISTINCT brand FROM products WHERE brand IS NOT NULL AND TRIM(brand) != '' ORDER BY brand ASC"
+  )
+  res.json({
+    categories,
+    brands: brandRows.map((r) => r.brand),
+    updatedAt: new Date().toISOString(),
+  })
+})
+
+app.get('/api/coupons', async (req, res) => {
+  const coupons = await dbWrapper.query(
+    'SELECT code, discount_percent, discount_amount, min_order_amount FROM coupons WHERE active = 1 ORDER BY min_order_amount ASC, code ASC'
+  )
+  res.json(
+    coupons.map((c) => ({
+      code: c.code,
+      discountPercent: Number(c.discount_percent || 0),
+      discountAmount: Number(c.discount_amount || 0),
+      minOrderAmount: Number(c.min_order_amount || 0),
+    }))
+  )
+})
+
+app.get('/api/products', async (req, res) => {
   const { category, search, brand, minPrice, maxPrice, sort, featured, bestseller, isNew, limit } = req.query
 
-  let sql = 'SELECT * FROM products WHERE 1=1'
+  let sql = `SELECT p.*,
+    (SELECT pi.image_url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.sort_order ASC, pi.id ASC LIMIT 1) AS image_url
+    FROM products p WHERE 1=1`
   const params = []
 
   if (category) {
@@ -228,17 +260,17 @@ app.get('/api/products', (req, res) => {
     params.push(Number(limit))
   }
 
-  const products = dbWrapper.query(sql, params)
+  const products = await dbWrapper.query(sql, params)
   res.json(products)
 })
 
-app.get('/api/products/:slug', (req, res) => {
-  const product = dbWrapper.get('SELECT * FROM products WHERE slug = ?', [req.params.slug])
+app.get('/api/products/:slug', async (req, res) => {
+  const product = await dbWrapper.get('SELECT * FROM products WHERE slug = ?', [req.params.slug])
   if (!product) return res.status(404).json({ error: 'Product not found' })
 
-  const images = dbWrapper.query('SELECT image_url FROM product_images WHERE product_id = ? ORDER BY sort_order ASC', [product.id])
-  const variants = dbWrapper.query('SELECT * FROM product_variants WHERE product_id = ?', [product.id])
-  const reviews = dbWrapper.query('SELECT * FROM reviews WHERE product_id = ? ORDER BY created_at DESC', [product.id])
+  const images = await dbWrapper.query('SELECT image_url FROM product_images WHERE product_id = ? ORDER BY sort_order ASC', [product.id])
+  const variants = await dbWrapper.query('SELECT * FROM product_variants WHERE product_id = ?', [product.id])
+  const reviews = await dbWrapper.query('SELECT * FROM reviews WHERE product_id = ? ORDER BY created_at DESC', [product.id])
 
   res.json({
     ...product,
@@ -251,25 +283,25 @@ app.get('/api/products/:slug', (req, res) => {
 // ----------------------------------------------------
 // Shopping Cart Endpoints (Task 8)
 // ----------------------------------------------------
-app.get('/api/cart', optionalAuth, (req, res) => {
+app.get('/api/cart', optionalAuth, async (req, res) => {
   const userId = req.user?.id
   const sessionId = req.headers['x-session-id'] || 'guest'
 
   let cart = userId
-    ? dbWrapper.get('SELECT * FROM carts WHERE user_id = ?', [userId])
-    : dbWrapper.get('SELECT * FROM carts WHERE session_id = ? AND user_id IS NULL', [sessionId])
+    ? await dbWrapper.get('SELECT * FROM carts WHERE user_id = ?', [userId])
+    : await dbWrapper.get('SELECT * FROM carts WHERE session_id = ? AND user_id IS NULL', [sessionId])
 
   if (!cart) {
     if (userId) {
-      const r = dbWrapper.run('INSERT INTO carts (user_id) VALUES (?)', [userId])
+      const r = await dbWrapper.run('INSERT INTO carts (user_id) VALUES (?)', [userId])
       cart = { id: Number(r.lastInsertRowid), user_id: userId }
     } else {
-      const r = dbWrapper.run('INSERT INTO carts (session_id) VALUES (?)', [sessionId])
+      const r = await dbWrapper.run('INSERT INTO carts (session_id) VALUES (?)', [sessionId])
       cart = { id: Number(r.lastInsertRowid), session_id: sessionId }
     }
   }
 
-  const items = dbWrapper.query(
+  const items = await dbWrapper.query(
     `SELECT ci.id, ci.cart_id, ci.product_id, ci.quantity, ci.color, ci.size,
             p.name, p.slug, p.price, p.price_old, p.brand, p.stock
      FROM cart_items ci
@@ -296,7 +328,7 @@ app.get('/api/cart', optionalAuth, (req, res) => {
   })
 })
 
-app.post('/api/cart/add', optionalAuth, (req, res) => {
+app.post('/api/cart/add', optionalAuth, async (req, res) => {
   const { productId, quantity = 1, color, size } = req.body
   const userId = req.user?.id
   const sessionId = req.headers['x-session-id'] || 'guest'
@@ -304,30 +336,30 @@ app.post('/api/cart/add', optionalAuth, (req, res) => {
   if (!productId) return res.status(400).json({ error: 'productId is required' })
 
   // Verify product & stock
-  const product = dbWrapper.get('SELECT id, stock, price FROM products WHERE id = ?', [productId])
+  const product = await dbWrapper.get('SELECT id, stock, price FROM products WHERE id = ?', [productId])
   if (!product) return res.status(404).json({ error: 'Product not found' })
   if (product.stock < quantity) return res.status(400).json({ error: 'Insufficient stock available' })
 
   let cart = userId
-    ? dbWrapper.get('SELECT id FROM carts WHERE user_id = ?', [userId])
-    : dbWrapper.get('SELECT id FROM carts WHERE session_id = ? AND user_id IS NULL', [sessionId])
+    ? await dbWrapper.get('SELECT id FROM carts WHERE user_id = ?', [userId])
+    : await dbWrapper.get('SELECT id FROM carts WHERE session_id = ? AND user_id IS NULL', [sessionId])
 
   if (!cart) {
     const r = userId
-      ? dbWrapper.run('INSERT INTO carts (user_id) VALUES (?)', [userId])
-      : dbWrapper.run('INSERT INTO carts (session_id) VALUES (?)', [sessionId])
+      ? await dbWrapper.run('INSERT INTO carts (user_id) VALUES (?)', [userId])
+      : await dbWrapper.run('INSERT INTO carts (session_id) VALUES (?)', [sessionId])
     cart = { id: Number(r.lastInsertRowid) }
   }
 
-  const existingItem = dbWrapper.get(
-    'SELECT id, quantity FROM cart_items WHERE cart_id = ? AND product_id = ? AND (color = ? OR (color IS NULL AND ? IS NULL)) AND (size = ? OR (size IS NULL AND ? IS NULL))',
-    [cart.id, productId, color || null, color || null, size || null, size || null]
+  const existingItem = await dbWrapper.get(
+    'SELECT id, quantity FROM cart_items WHERE cart_id = ? AND product_id = ? AND color IS NOT DISTINCT FROM ? AND size IS NOT DISTINCT FROM ?',
+    [cart.id, productId, color || null, size || null]
   )
 
   if (existingItem) {
-    dbWrapper.run('UPDATE cart_items SET quantity = quantity + ? WHERE id = ?', [quantity, existingItem.id])
+    await dbWrapper.run('UPDATE cart_items SET quantity = quantity + ? WHERE id = ?', [quantity, existingItem.id])
   } else {
-    dbWrapper.run(
+    await dbWrapper.run(
       'INSERT INTO cart_items (cart_id, product_id, quantity, color, size) VALUES (?, ?, ?, ?, ?)',
       [cart.id, productId, quantity, color || null, size || null]
     )
@@ -336,42 +368,42 @@ app.post('/api/cart/add', optionalAuth, (req, res) => {
   res.json({ message: 'Item added to cart', cartId: cart.id })
 })
 
-app.put('/api/cart/item/:id', (req, res) => {
+app.put('/api/cart/item/:id', async (req, res) => {
   const { quantity } = req.body
   if (quantity <= 0) {
-    dbWrapper.run('DELETE FROM cart_items WHERE id = ?', [req.params.id])
+    await dbWrapper.run('DELETE FROM cart_items WHERE id = ?', [req.params.id])
   } else {
-    dbWrapper.run('UPDATE cart_items SET quantity = ? WHERE id = ?', [quantity, req.params.id])
+    await dbWrapper.run('UPDATE cart_items SET quantity = ? WHERE id = ?', [quantity, req.params.id])
   }
   res.json({ message: 'Cart updated' })
 })
 
-app.delete('/api/cart/item/:id', (req, res) => {
-  dbWrapper.run('DELETE FROM cart_items WHERE id = ?', [req.params.id])
+app.delete('/api/cart/item/:id', async (req, res) => {
+  await dbWrapper.run('DELETE FROM cart_items WHERE id = ?', [req.params.id])
   res.json({ message: 'Item removed from cart' })
 })
 
-app.post('/api/cart/merge', authenticateToken, (req, res) => {
+app.post('/api/cart/merge', authenticateToken, async (req, res) => {
   const { guestItems } = req.body
   if (!Array.isArray(guestItems) || guestItems.length === 0) {
     return res.json({ message: 'No guest items to merge' })
   }
 
-  let userCart = dbWrapper.get('SELECT id FROM carts WHERE user_id = ?', [req.user.id])
+  let userCart = await dbWrapper.get('SELECT id FROM carts WHERE user_id = ?', [req.user.id])
   if (!userCart) {
-    const r = dbWrapper.run('INSERT INTO carts (user_id) VALUES (?)', [req.user.id])
+    const r = await dbWrapper.run('INSERT INTO carts (user_id) VALUES (?)', [req.user.id])
     userCart = { id: Number(r.lastInsertRowid) }
   }
 
   for (const item of guestItems) {
-    const existing = dbWrapper.get(
+    const existing = await dbWrapper.get(
       'SELECT id FROM cart_items WHERE cart_id = ? AND product_id = ?',
       [userCart.id, item.productId]
     )
     if (existing) {
-      dbWrapper.run('UPDATE cart_items SET quantity = quantity + ? WHERE id = ?', [item.qty || 1, existing.id])
+      await dbWrapper.run('UPDATE cart_items SET quantity = quantity + ? WHERE id = ?', [item.qty || 1, existing.id])
     } else {
-      dbWrapper.run(
+      await dbWrapper.run(
         'INSERT INTO cart_items (cart_id, product_id, quantity, color, size) VALUES (?, ?, ?, ?, ?)',
         [userCart.id, item.productId, item.qty || 1, item.color || null, item.size || null]
       )
@@ -384,14 +416,14 @@ app.post('/api/cart/merge', authenticateToken, (req, res) => {
 // ----------------------------------------------------
 // Wishlist Endpoints (Task 9)
 // ----------------------------------------------------
-app.get('/api/wishlist', authenticateToken, (req, res) => {
-  let wishlist = dbWrapper.get('SELECT id FROM wishlists WHERE user_id = ?', [req.user.id])
+app.get('/api/wishlist', authenticateToken, async (req, res) => {
+  let wishlist = await dbWrapper.get('SELECT id FROM wishlists WHERE user_id = ?', [req.user.id])
   if (!wishlist) {
-    const r = dbWrapper.run('INSERT INTO wishlists (user_id) VALUES (?)', [req.user.id])
+    const r = await dbWrapper.run('INSERT INTO wishlists (user_id) VALUES (?)', [req.user.id])
     wishlist = { id: Number(r.lastInsertRowid) }
   }
 
-  const items = dbWrapper.query(
+  const items = await dbWrapper.query(
     `SELECT p.*, wi.created_at as saved_at
      FROM wishlist_items wi
      JOIN products p ON wi.product_id = p.id
@@ -404,26 +436,26 @@ app.get('/api/wishlist', authenticateToken, (req, res) => {
   res.json({ productIds, items })
 })
 
-app.post('/api/wishlist/toggle', authenticateToken, (req, res) => {
+app.post('/api/wishlist/toggle', authenticateToken, async (req, res) => {
   const { productId } = req.body
   if (!productId) return res.status(400).json({ error: 'productId is required' })
 
-  let wishlist = dbWrapper.get('SELECT id FROM wishlists WHERE user_id = ?', [req.user.id])
+  let wishlist = await dbWrapper.get('SELECT id FROM wishlists WHERE user_id = ?', [req.user.id])
   if (!wishlist) {
-    const r = dbWrapper.run('INSERT INTO wishlists (user_id) VALUES (?)', [req.user.id])
+    const r = await dbWrapper.run('INSERT INTO wishlists (user_id) VALUES (?)', [req.user.id])
     wishlist = { id: Number(r.lastInsertRowid) }
   }
 
-  const existing = dbWrapper.get(
+  const existing = await dbWrapper.get(
     'SELECT id FROM wishlist_items WHERE wishlist_id = ? AND product_id = ?',
     [wishlist.id, productId]
   )
 
   if (existing) {
-    dbWrapper.run('DELETE FROM wishlist_items WHERE id = ?', [existing.id])
+    await dbWrapper.run('DELETE FROM wishlist_items WHERE id = ?', [existing.id])
     res.json({ inWishlist: false, message: 'Removed from wishlist' })
   } else {
-    dbWrapper.run('INSERT INTO wishlist_items (wishlist_id, product_id) VALUES (?, ?)', [wishlist.id, productId])
+    await dbWrapper.run('INSERT INTO wishlist_items (wishlist_id, product_id) VALUES (?, ?)', [wishlist.id, productId])
     res.json({ inWishlist: true, message: 'Added to wishlist' })
   }
 })
@@ -431,15 +463,15 @@ app.post('/api/wishlist/toggle', authenticateToken, (req, res) => {
 // ----------------------------------------------------
 // Indian Addresses (Task 11)
 // ----------------------------------------------------
-app.get('/api/addresses', authenticateToken, (req, res) => {
-  const addresses = dbWrapper.query(
+app.get('/api/addresses', authenticateToken, async (req, res) => {
+  const addresses = await dbWrapper.query(
     'SELECT * FROM addresses WHERE user_id = ? ORDER BY is_default DESC, id DESC',
     [req.user.id]
   )
   res.json(addresses)
 })
 
-app.post('/api/addresses', authenticateToken, (req, res) => {
+app.post('/api/addresses', authenticateToken, async (req, res) => {
   const { fullName, mobile, addressLine1, addressLine2, landmark, city, state, pinCode, isDefault } = req.body
 
   if (!fullName || !mobile || !addressLine1 || !city || !state || !pinCode) {
@@ -447,10 +479,10 @@ app.post('/api/addresses', authenticateToken, (req, res) => {
   }
 
   if (isDefault) {
-    dbWrapper.run('UPDATE addresses SET is_default = 0 WHERE user_id = ?', [req.user.id])
+    await dbWrapper.run('UPDATE addresses SET is_default = 0 WHERE user_id = ?', [req.user.id])
   }
 
-  const r = dbWrapper.run(
+  const r = await dbWrapper.run(
     `INSERT INTO addresses (user_id, full_name, mobile, address_line1, address_line2, landmark, city, state, pin_code, country, is_default)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'India', ?)`,
     [req.user.id, fullName, mobile, addressLine1, addressLine2 || null, landmark || null, city, state, pinCode, isDefault ? 1 : 0]
@@ -459,21 +491,21 @@ app.post('/api/addresses', authenticateToken, (req, res) => {
   res.status(201).json({ id: Number(r.lastInsertRowid), message: 'Address saved successfully' })
 })
 
-app.delete('/api/addresses/:id', authenticateToken, (req, res) => {
-  dbWrapper.run('DELETE FROM addresses WHERE id = ? AND user_id = ?', [req.params.id, req.user.id])
+app.delete('/api/addresses/:id', authenticateToken, async (req, res) => {
+  await dbWrapper.run('DELETE FROM addresses WHERE id = ? AND user_id = ?', [req.params.id, req.user.id])
   res.json({ message: 'Address deleted' })
 })
 
-app.patch('/api/addresses/:id/default', authenticateToken, (req, res) => {
-  dbWrapper.run('UPDATE addresses SET is_default = 0 WHERE user_id = ?', [req.user.id])
-  dbWrapper.run('UPDATE addresses SET is_default = 1 WHERE id = ? AND user_id = ?', [req.params.id, req.user.id])
+app.patch('/api/addresses/:id/default', authenticateToken, async (req, res) => {
+  await dbWrapper.run('UPDATE addresses SET is_default = 0 WHERE user_id = ?', [req.user.id])
+  await dbWrapper.run('UPDATE addresses SET is_default = 1 WHERE id = ? AND user_id = ?', [req.params.id, req.user.id])
   res.json({ message: 'Default address updated' })
 })
 
 // ----------------------------------------------------
 // Orders & Checkout (Task 10)
 // ----------------------------------------------------
-app.post('/api/orders', authenticateToken, (req, res) => {
+app.post('/api/orders', authenticateToken, async (req, res) => {
   const { items, shippingAddress, paymentMethod = 'UPI', discount = 0 } = req.body
 
   if (!items || !items.length || !shippingAddress) {
@@ -490,7 +522,7 @@ app.post('/api/orders', authenticateToken, (req, res) => {
     ? shippingAddress
     : `${shippingAddress.fullName}, ${shippingAddress.addressLine1}, ${shippingAddress.city}, ${shippingAddress.state} - ${shippingAddress.pinCode} (Ph: ${shippingAddress.mobile})`
 
-  const r = dbWrapper.run(
+  const r = await dbWrapper.run(
     `INSERT INTO orders (order_number, user_id, customer_name, customer_email, customer_mobile, subtotal, discount, shipping, gst, total, status, payment_method, payment_status, shipping_address)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Confirmed', ?, 'Completed', ?)`,
     [orderNum, req.user.id, req.user.name, req.user.email, req.user.mobile || '', subtotal, discount, shipping, gst, total, paymentMethod, addressStr]
@@ -499,7 +531,7 @@ app.post('/api/orders', authenticateToken, (req, res) => {
   const orderId = Number(r.lastInsertRowid)
 
   for (const it of items) {
-    dbWrapper.run(
+    await dbWrapper.run(
       `INSERT INTO order_items (order_id, product_id, product_name, price, quantity, color, size, image_url)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [orderId, it.productId || null, it.name, it.price, it.qty, it.color || null, it.size || null, it.image || null]
@@ -507,21 +539,21 @@ app.post('/api/orders', authenticateToken, (req, res) => {
 
     // Deduct inventory
     if (it.productId) {
-      dbWrapper.run('UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?', [it.qty, it.productId])
+      await dbWrapper.run('UPDATE products SET stock = GREATEST(0, stock - ?) WHERE id = ?', [it.qty, it.productId])
     }
   }
 
   // Record payment
-  dbWrapper.run(
+  await dbWrapper.run(
     `INSERT INTO payments (order_id, transaction_id, amount, currency, payment_method, status)
      VALUES (?, ?, ?, 'INR', ?, 'Success')`,
     [orderId, `TXN-${orderNum}`, total, paymentMethod]
   )
 
   // Clear user cart in DB
-  const userCart = dbWrapper.get('SELECT id FROM carts WHERE user_id = ?', [req.user.id])
+  const userCart = await dbWrapper.get('SELECT id FROM carts WHERE user_id = ?', [req.user.id])
   if (userCart) {
-    dbWrapper.run('DELETE FROM cart_items WHERE cart_id = ?', [userCart.id])
+    await dbWrapper.run('DELETE FROM cart_items WHERE cart_id = ?', [userCart.id])
   }
 
   res.status(201).json({
@@ -533,21 +565,23 @@ app.post('/api/orders', authenticateToken, (req, res) => {
   })
 })
 
-app.get('/api/orders', authenticateToken, (req, res) => {
-  const orders = dbWrapper.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id])
-  const detailedOrders = orders.map((o) => {
-    const items = dbWrapper.query('SELECT * FROM order_items WHERE order_id = ?', [o.id])
-    return { ...o, items }
-  })
+app.get('/api/orders', authenticateToken, async (req, res) => {
+  const orders = await dbWrapper.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC', [req.user.id])
+  const detailedOrders = await Promise.all(
+    orders.map(async (o) => {
+      const items = await dbWrapper.query('SELECT * FROM order_items WHERE order_id = ?', [o.id])
+      return { ...o, items }
+    })
+  )
   res.json(detailedOrders)
 })
 
-app.get('/api/orders/:id', authenticateToken, (req, res) => {
-  const order = dbWrapper.get('SELECT * FROM orders WHERE id = ? AND (user_id = ? OR ? = "admin")', [req.params.id, req.user.id, req.user.role])
+app.get('/api/orders/:id', authenticateToken, async (req, res) => {
+  const order = await dbWrapper.get("SELECT * FROM orders WHERE id = ? AND (user_id = ? OR ? = 'admin')", [req.params.id, req.user.id, req.user.role])
   if (!order) return res.status(404).json({ error: 'Order not found' })
 
-  const items = dbWrapper.query('SELECT * FROM order_items WHERE order_id = ?', [order.id])
-  const payment = dbWrapper.get('SELECT * FROM payments WHERE order_id = ?', [order.id])
+  const items = await dbWrapper.query('SELECT * FROM order_items WHERE order_id = ?', [order.id])
+  const payment = await dbWrapper.get('SELECT * FROM payments WHERE order_id = ?', [order.id])
 
   res.json({ ...order, items, payment })
 })
@@ -555,24 +589,24 @@ app.get('/api/orders/:id', authenticateToken, (req, res) => {
 // ----------------------------------------------------
 // Admin Dashboard Endpoints (Task 12)
 // ----------------------------------------------------
-app.get('/api/admin/overview', authenticateToken, requireAdmin, (req, res) => {
-  const totalRevenue = dbWrapper.get("SELECT COALESCE(SUM(total), 0) as val FROM orders WHERE status != 'Cancelled'")
-  const todaySales = dbWrapper.get("SELECT COALESCE(SUM(total), 0) as val FROM orders WHERE DATE(created_at) = DATE('now') AND status != 'Cancelled'")
-  const avgOrderValue = dbWrapper.get("SELECT COALESCE(AVG(total), 0) as val FROM orders WHERE status != 'Cancelled'")
-  const totalOrders = dbWrapper.get('SELECT COUNT(*) as count FROM orders')
-  const totalCustomers = dbWrapper.get("SELECT COUNT(*) as count FROM users WHERE role = 'customer'")
-  const totalProducts = dbWrapper.get('SELECT COUNT(*) as count FROM products')
-  const lowStock = dbWrapper.query('SELECT id, name, stock, brand FROM products WHERE stock <= 10')
-  const recentOrders = dbWrapper.query('SELECT * FROM orders ORDER BY id DESC LIMIT 10')
+app.get('/api/admin/overview', authenticateToken, requireAdmin, async (req, res) => {
+  const totalRevenue = await dbWrapper.get("SELECT COALESCE(SUM(total), 0) as val FROM orders WHERE status != 'Cancelled'")
+  const todaySales = await dbWrapper.get("SELECT COALESCE(SUM(total), 0) as val FROM orders WHERE DATE(created_at) = CURRENT_DATE AND status != 'Cancelled'")
+  const avgOrderValue = await dbWrapper.get("SELECT COALESCE(AVG(total), 0) as val FROM orders WHERE status != 'Cancelled'")
+  const totalOrders = await dbWrapper.get('SELECT COUNT(*) as count FROM orders')
+  const totalCustomers = await dbWrapper.get("SELECT COUNT(*) as count FROM users WHERE role = 'customer'")
+  const totalProducts = await dbWrapper.get('SELECT COUNT(*) as count FROM products')
+  const lowStock = await dbWrapper.query('SELECT id, name, stock, brand FROM products WHERE stock <= 10')
+  const recentOrders = await dbWrapper.query('SELECT * FROM orders ORDER BY id DESC LIMIT 10')
 
   res.json({
     metrics: {
       totalRevenue: Number(totalRevenue.val),
       todaySales: Number(todaySales.val),
       averageOrderValue: Math.round(Number(avgOrderValue.val)),
-      totalOrders: totalOrders.count,
-      totalCustomers: totalCustomers.count,
-      totalProducts: totalProducts.count,
+      totalOrders: Number(totalOrders.count),
+      totalCustomers: Number(totalCustomers.count),
+      totalProducts: Number(totalProducts.count),
     },
     lowStock,
     recentOrders,
@@ -580,29 +614,31 @@ app.get('/api/admin/overview', authenticateToken, requireAdmin, (req, res) => {
   })
 })
 
-app.get('/api/admin/orders', authenticateToken, requireAdmin, (req, res) => {
-  const orders = dbWrapper.query('SELECT * FROM orders ORDER BY id DESC')
-  const full = orders.map((o) => ({
-    ...o,
-    items: dbWrapper.query('SELECT * FROM order_items WHERE order_id = ?', [o.id]),
-  }))
+app.get('/api/admin/orders', authenticateToken, requireAdmin, async (req, res) => {
+  const orders = await dbWrapper.query('SELECT * FROM orders ORDER BY id DESC')
+  const full = await Promise.all(
+    orders.map(async (o) => ({
+      ...o,
+      items: await dbWrapper.query('SELECT * FROM order_items WHERE order_id = ?', [o.id]),
+    }))
+  )
   res.json(full)
 })
 
-app.patch('/api/admin/orders/:id/status', authenticateToken, requireAdmin, (req, res) => {
+app.patch('/api/admin/orders/:id/status', authenticateToken, requireAdmin, async (req, res) => {
   const { status } = req.body
   const allowed = ['Pending', 'Confirmed', 'Processing', 'Shipped', 'Out for Delivery', 'Delivered', 'Cancelled']
   if (!allowed.includes(status)) {
     return res.status(400).json({ error: `Status must be one of: ${allowed.join(', ')}` })
   }
 
-  dbWrapper.run('UPDATE orders SET status = ? WHERE id = ?', [status, req.params.id])
+  await dbWrapper.run('UPDATE orders SET status = ? WHERE id = ?', [status, req.params.id])
   res.json({ message: `Order status updated to ${status}` })
 })
 
-app.post('/api/admin/products', authenticateToken, requireAdmin, (req, res) => {
+app.post('/api/admin/products', authenticateToken, requireAdmin, async (req, res) => {
   const { name, slug, price, priceOld, categorySlug, brand, stock, description } = req.body
-  const r = dbWrapper.run(
+  const r = await dbWrapper.run(
     `INSERT INTO products (name, slug, price, price_old, category_slug, brand, stock, description)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [name, slug || name.toLowerCase().replace(/\s+/g, '-'), price, priceOld || null, categorySlug, brand, stock || 20, description || '']
@@ -610,8 +646,8 @@ app.post('/api/admin/products', authenticateToken, requireAdmin, (req, res) => {
   res.status(201).json({ id: Number(r.lastInsertRowid), message: 'Product created' })
 })
 
-app.delete('/api/admin/products/:id', authenticateToken, requireAdmin, (req, res) => {
-  dbWrapper.run('DELETE FROM products WHERE id = ?', [req.params.id])
+app.delete('/api/admin/products/:id', authenticateToken, requireAdmin, async (req, res) => {
+  await dbWrapper.run('DELETE FROM products WHERE id = ?', [req.params.id])
   res.json({ message: 'Product deleted' })
 })
 

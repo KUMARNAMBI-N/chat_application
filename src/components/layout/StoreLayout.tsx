@@ -4,6 +4,7 @@ import Navbar from './Navbar'
 import Footer from './Footer'
 import CartDrawer from '@/components/cart/CartDrawer'
 import ToastStack from '@/components/ui/ToastStack'
+import AIChatWidget from '@/components/chatbot/AIChatWidget'
 
 function ScrollToTop() {
   const { pathname } = useLocation()
@@ -24,6 +25,7 @@ export default function StoreLayout() {
       <Footer />
       <CartDrawer />
       <ToastStack />
+      <AIChatWidget />
     </div>
   )
 }

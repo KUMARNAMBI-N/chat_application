@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { categories } from '@/data/categories'
-import { priceBounds, products as allProducts } from '@/data/products'
+import { priceBounds } from '@/data/products'
+import { useProductsStore } from '@/stores/products'
 import { formatPrice } from '@/lib/format'
 import RatingStars from '@/components/ui/RatingStars'
 
@@ -12,10 +13,12 @@ export interface CatalogFilterState {
   minRating: number
 }
 
+const MAX_CATALOG_PRICE = Math.max(priceBounds.max, 175000)
+
 export const defaultFilters: CatalogFilterState = {
   category: '',
   brands: [],
-  maxPrice: priceBounds.max,
+  maxPrice: MAX_CATALOG_PRICE,
   minRating: 0,
 }
 
@@ -28,12 +31,13 @@ interface Props {
 
 export default function FilterSidebar({ filters, onChange, lockCategory = false }: Props) {
   const { t } = useTranslation()
+  const allProducts = useProductsStore((s) => s.products)
 
   const availableBrands = useMemo(() => {
     const activeCat = lockCategory ? filters.category : filters.category
     const relevant = activeCat ? allProducts.filter((p) => p.category === activeCat) : allProducts
     return Array.from(new Set(relevant.map((p) => p.brand))).sort()
-  }, [filters.category, lockCategory])
+  }, [allProducts, filters.category, lockCategory])
 
   const toggleBrand = (brand: string) => {
     const next = filters.brands.includes(brand)
@@ -95,7 +99,7 @@ export default function FilterSidebar({ filters, onChange, lockCategory = false 
         <input
           type="range"
           min={priceBounds.min}
-          max={priceBounds.max}
+          max={MAX_CATALOG_PRICE}
           step={100}
           value={filters.maxPrice}
           onChange={(e) => onChange({ ...filters, maxPrice: Number(e.target.value) })}

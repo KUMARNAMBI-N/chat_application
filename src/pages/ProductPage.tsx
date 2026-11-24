@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { findProduct, productImages, relatedProducts } from '@/data/products'
+import { findProduct, productImages } from '@/data/products'
+import type { Product } from '@/data/types'
+import { useProductsStore } from '@/stores/products'
 import { useCartStore } from '@/stores/cart'
 import { useWishlistStore } from '@/stores/wishlist'
 import { useUiStore } from '@/stores/ui'
@@ -19,7 +21,13 @@ type Tab = 'description' | 'specs' | 'reviews'
 export default function ProductPage() {
   const { t } = useTranslation()
   const { slug = '' } = useParams()
-  const product = findProduct(slug)
+  const allProducts = useProductsStore((s) => s.products)
+  const fetchProducts = useProductsStore((s) => s.fetchProducts)
+  const fetchProductBySlug = useProductsStore((s) => s.fetchProductBySlug)
+
+  const cachedProduct = allProducts.find((p) => p.slug === slug) ?? findProduct(slug)
+  const [product, setProduct] = useState<Product | null>(cachedProduct ?? null)
+  const [loadingProduct, setLoadingProduct] = useState(!cachedProduct)
 
   const addItem = useCartStore((s) => s.addItem)
   const openCart = useUiStore((s) => s.openCartDrawer)
@@ -28,16 +36,54 @@ export default function ProductPage() {
   const isWished = useWishlistStore((s) => (product ? s.ids.includes(product.id) : false))
 
   const [activeImg, setActiveImg] = useState(0)
-  const [color, setColor] = useState<string | undefined>(product?.variants.colors[0])
-  const [size, setSize] = useState<string | undefined>(product?.variants.sizes[0])
+  const [color, setColor] = useState<string | undefined>(cachedProduct?.variants.colors[0])
+  const [size, setSize] = useState<string | undefined>(cachedProduct?.variants.sizes[0])
   const [qty, setQty] = useState(1)
   const [tab, setTab] = useState<Tab>('description')
 
+  useEffect(() => {
+    fetchProducts()
+  }, [fetchProducts])
+
+  useEffect(() => {
+    let active = true
+    setActiveImg(0)
+    setQty(1)
+    setLoadingProduct(!cachedProduct)
+    if (cachedProduct) {
+      setProduct(cachedProduct)
+      setColor(cachedProduct.variants.colors[0])
+      setSize(cachedProduct.variants.sizes[0])
+    }
+    fetchProductBySlug(slug).then((fresh) => {
+      if (!active) return
+      if (fresh) {
+        setProduct(fresh)
+        setColor(fresh.variants.colors[0])
+        setSize(fresh.variants.sizes[0])
+      } else if (!cachedProduct) {
+        setProduct(null)
+      }
+      setLoadingProduct(false)
+    })
+    return () => {
+      active = false
+    }
+  }, [slug, fetchProductBySlug])
+
+  if (loadingProduct) {
+    return (
+      <div className="flex h-96 w-full items-center justify-center">
+        <span className="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" />
+      </div>
+    )
+  }
+
   if (!product) return <NotFoundPage />
 
-  const images = productImages(product.slug, 4)
+  const images = product.images && product.images.length > 0 ? product.images : productImages(product.slug, 4)
   const outOfStock = product.stock === 0
-  const related = relatedProducts(product)
+  const related = allProducts.filter((p) => p.category === product.category && p.id !== product.id).slice(0, 4)
 
   const stockLabel = outOfStock
     ? { text: t('product.outOfStock'), cls: 'bg-error-50 text-error-600 dark:bg-error-500/15 dark:text-error-500' }

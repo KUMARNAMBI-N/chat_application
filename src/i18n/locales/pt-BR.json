@@ -48,6 +48,7 @@
     "new": "Novidades"
   },
   "categories": {
+    "mobiles": { "name": "Celulares", "desc": "Smartphones 5G, dobráveis, gamer e básicos" },
     "eletronicos": { "name": "Eletrônicos", "desc": "Gadgets e dispositivos" },
     "moda": { "name": "Moda", "desc": "Roupas e acessórios" },
     "casa": { "name": "Casa & Decoração", "desc": "Tudo para o seu lar" },

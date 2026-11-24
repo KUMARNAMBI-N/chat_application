@@ -1,0 +1,198 @@
+-- ABC Cart Relational Database Schema (PostgreSQL)
+
+CREATE TABLE IF NOT EXISTS roles (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(50) NOT NULL UNIQUE,
+  description VARCHAR(255)
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  email VARCHAR(150) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  mobile VARCHAR(20),
+  role VARCHAR(50) DEFAULT 'customer',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS categories (
+  id SERIAL PRIMARY KEY,
+  slug VARCHAR(100) NOT NULL UNIQUE,
+  name VARCHAR(100) NOT NULL,
+  icon VARCHAR(50) DEFAULT 'package',
+  description VARCHAR(255),
+  image VARCHAR(500),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS products (
+  id SERIAL PRIMARY KEY,
+  slug VARCHAR(150) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  price DECIMAL(10,2) NOT NULL,
+  price_old DECIMAL(10,2),
+  category_slug VARCHAR(100) NOT NULL,
+  brand VARCHAR(100) NOT NULL,
+  rating DECIMAL(3,2) DEFAULT 4.5,
+  reviews_count INTEGER DEFAULT 0,
+  stock INTEGER DEFAULT 50,
+  description TEXT,
+  featured SMALLINT DEFAULT 0,
+  bestseller SMALLINT DEFAULT 0,
+  is_new SMALLINT DEFAULT 0,
+  trending SMALLINT DEFAULT 0,
+  special_offer SMALLINT DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (category_slug) REFERENCES categories(slug)
+);
+
+CREATE TABLE IF NOT EXISTS product_images (
+  id SERIAL PRIMARY KEY,
+  product_id INTEGER NOT NULL,
+  image_url VARCHAR(500) NOT NULL,
+  sort_order INTEGER DEFAULT 0,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS product_variants (
+  id SERIAL PRIMARY KEY,
+  product_id INTEGER NOT NULL,
+  color VARCHAR(50),
+  size VARCHAR(50),
+  stock INTEGER DEFAULT 10,
+  price_override DECIMAL(10,2),
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS inventory (
+  id SERIAL PRIMARY KEY,
+  product_id INTEGER NOT NULL UNIQUE,
+  quantity INTEGER DEFAULT 0,
+  reserved INTEGER DEFAULT 0,
+  low_stock_threshold INTEGER DEFAULT 5,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS carts (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER,
+  session_id VARCHAR(100),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS cart_items (
+  id SERIAL PRIMARY KEY,
+  cart_id INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  quantity INTEGER DEFAULT 1,
+  color VARCHAR(50),
+  size VARCHAR(50),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (cart_id) REFERENCES carts(id) ON DELETE CASCADE,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS wishlists (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL UNIQUE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS wishlist_items (
+  id SERIAL PRIMARY KEY,
+  wishlist_id INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(wishlist_id, product_id),
+  FOREIGN KEY (wishlist_id) REFERENCES wishlists(id) ON DELETE CASCADE,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS addresses (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  full_name VARCHAR(100) NOT NULL,
+  mobile VARCHAR(20) NOT NULL,
+  address_line1 VARCHAR(255) NOT NULL,
+  address_line2 VARCHAR(255),
+  landmark VARCHAR(150),
+  city VARCHAR(100) NOT NULL,
+  state VARCHAR(100) NOT NULL,
+  pin_code VARCHAR(10) NOT NULL,
+  country VARCHAR(50) DEFAULT 'India',
+  is_default SMALLINT DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+  id SERIAL PRIMARY KEY,
+  order_number VARCHAR(50) NOT NULL UNIQUE,
+  user_id INTEGER,
+  customer_name VARCHAR(100) NOT NULL,
+  customer_email VARCHAR(150) NOT NULL,
+  customer_mobile VARCHAR(20) NOT NULL,
+  subtotal DECIMAL(10,2) NOT NULL,
+  discount DECIMAL(10,2) DEFAULT 0,
+  shipping DECIMAL(10,2) DEFAULT 0,
+  gst DECIMAL(10,2) DEFAULT 0,
+  total DECIMAL(10,2) NOT NULL,
+  currency VARCHAR(10) DEFAULT 'INR',
+  status VARCHAR(50) DEFAULT 'Confirmed',
+  payment_method VARCHAR(50) DEFAULT 'UPI',
+  payment_status VARCHAR(50) DEFAULT 'Completed',
+  shipping_address TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS order_items (
+  id SERIAL PRIMARY KEY,
+  order_id INTEGER NOT NULL,
+  product_id INTEGER,
+  product_name VARCHAR(255) NOT NULL,
+  price DECIMAL(10,2) NOT NULL,
+  quantity INTEGER NOT NULL,
+  color VARCHAR(50),
+  size VARCHAR(50),
+  image_url VARCHAR(500),
+  FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS payments (
+  id SERIAL PRIMARY KEY,
+  order_id INTEGER NOT NULL,
+  transaction_id VARCHAR(100) NOT NULL UNIQUE,
+  amount DECIMAL(10,2) NOT NULL,
+  currency VARCHAR(10) DEFAULT 'INR',
+  payment_method VARCHAR(50) NOT NULL,
+  status VARCHAR(50) DEFAULT 'Success',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS coupons (
+  id SERIAL PRIMARY KEY,
+  code VARCHAR(50) NOT NULL UNIQUE,
+  discount_percent DECIMAL(5,2) DEFAULT 0,
+  discount_amount DECIMAL(10,2) DEFAULT 0,
+  min_order_amount DECIMAL(10,2) DEFAULT 0,
+  active SMALLINT DEFAULT 1,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS reviews (
+  id SERIAL PRIMARY KEY,
+  product_id INTEGER NOT NULL,
+  user_id INTEGER,
+  author_name VARCHAR(100) NOT NULL,
+  rating INTEGER NOT NULL,
+  comment TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);

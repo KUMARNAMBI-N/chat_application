@@ -63,13 +63,13 @@ export const SEED_PRODUCTS = [
   { name: 'Himalayan Organic Green Tea 100g', slug: 'cha-verde-himalaya', price: 349.00, priceOld: 499.00, category: 'mercado', brand: 'ZenAir', rating: 4.6, reviewsCount: 114, stock: 90, featured: 0, bestseller: 0, isNew: 0, trending: 0, specialOffer: 0, image: 'https://images.unsplash.com/photo-1576092768241-dec231879fc3?w=600&h=600&fit=crop&q=80' },
 ]
 
-export function seedProducts() {
-  const count = dbWrapper.get('SELECT COUNT(*) as count FROM products')
-  if (count.count > 0) return
+export async function seedProducts() {
+  const count = await dbWrapper.get('SELECT COUNT(*) as count FROM products')
+  if (Number(count.count) > 0) return
 
   for (const p of SEED_PRODUCTS) {
     const desc = `${p.name} from brand ${p.brand}. Premium quality, authentic design with 12 months manufacturer warranty and fast delivery across India.`
-    const r = dbWrapper.run(
+    const r = await dbWrapper.run(
       `INSERT INTO products (slug, name, price, price_old, category_slug, brand, rating, reviews_count, stock, description, featured, bestseller, is_new, trending, special_offer)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [p.slug, p.name, p.price, p.priceOld, p.category, p.brand, p.rating, p.reviewsCount, p.stock, desc, p.featured, p.bestseller, p.isNew, p.trending, p.specialOffer]
@@ -78,13 +78,13 @@ export function seedProducts() {
     const productId = Number(r.lastInsertRowid)
 
     // Product Image
-    dbWrapper.run(
+    await dbWrapper.run(
       'INSERT INTO product_images (product_id, image_url, sort_order) VALUES (?, ?, 0)',
       [productId, p.image]
     )
 
     // Inventory
-    dbWrapper.run(
+    await dbWrapper.run(
       'INSERT INTO inventory (product_id, quantity, reserved, low_stock_threshold) VALUES (?, ?, 0, 5)',
       [productId, p.stock]
     )

@@ -3,10 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server": "node server/index.js",
+    "chatbot": "ai-chatbot\\venv\\Scripts\\python.exe -m uvicorn app.main:app --app-dir ai-chatbot --host 0.0.0.0 --port 8001",
+    "dev:all": "concurrently \"npm run server\" \"npm run dev\" \"npm run chatbot\"",
+    "seed:large": "node server/scripts/generateTestData.js",
+    "seed:mobiles": "node server/scripts/seedMobiles.js"
   },
   "dependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -22,10 +30,14 @@
     "i18next-browser-languagedetector": "^8.2.1",
     "jsonwebtoken": "^9.0.3",
     "mysql2": "^3.24.6",
+    "pg": "^8.23.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-i18next": "^17.0.8",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.1.1",
+    "remark-gfm": "^4.0.1",
+    "sql.js": "^1.17.0",
     "yup": "^1.7.1",
     "zustand": "^5.0.2"
   },
@@ -35,6 +47,7 @@
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.2.5",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",

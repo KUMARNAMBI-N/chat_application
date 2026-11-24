@@ -1,8 +1,8 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { categories } from '@/data/categories'
-import { products } from '@/data/products'
+import { useProductsStore } from '@/stores/products'
 import { useUiStore } from '@/stores/ui'
 import ProductCard from '@/components/product/ProductCard'
 import SectionHeader from '@/components/ui/SectionHeader'
@@ -19,7 +19,13 @@ const BENEFITS = [
 export default function HomePage() {
   const { t } = useTranslation()
   const notify = useUiStore((s) => s.notifySuccess)
+  const products = useProductsStore((s) => s.products)
+  const fetchProducts = useProductsStore((s) => s.fetchProducts)
   const [email, setEmail] = useState('')
+
+  useEffect(() => {
+    fetchProducts()
+  }, [fetchProducts])
 
   const featured = products.filter((p) => p.featured).slice(0, 8)
   const bestsellers = products.filter((p) => p.bestseller).slice(0, 4)

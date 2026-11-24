@@ -21,3 +21,11 @@ dist/
 # Editor files
 .vscode/
 .idea/
+
+# Python AI Chatbot
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+ai-chatbot/.env

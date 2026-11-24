@@ -1,13 +1,21 @@
+import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useWishlistStore } from '@/stores/wishlist'
-import { products } from '@/data/products'
+import { useProductsStore } from '@/stores/products'
 import ProductCard from '@/components/product/ProductCard'
 import EmptyState from '@/components/ui/EmptyState'
 
 export default function AccountWishlistPage() {
   const { t } = useTranslation()
   const ids = useWishlistStore((s) => s.ids)
+  const products = useProductsStore((s) => s.products)
+  const fetchProducts = useProductsStore((s) => s.fetchProducts)
+
+  useEffect(() => {
+    fetchProducts()
+  }, [fetchProducts])
+
   const items = products.filter((p) => ids.includes(p.id))
 
   return (

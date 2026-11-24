@@ -1,67 +1,126 @@
-import { DatabaseSync } from 'node:sqlite'
+import 'dotenv/config'
+import pg from 'pg'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import bcrypt from 'bcryptjs'
 import { seedProducts } from './seedProducts.js'
 
+const { Pool, Client } = pg
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const dataDir = path.join(__dirname, 'data')
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true })
+
+const dbConfig = {
+  host: process.env.PGHOST || 'localhost',
+  port: Number(process.env.PGPORT || 5432),
+  user: process.env.PGUSER || 'postgres',
+  password: process.env.PGPASSWORD || 'root',
+  database: process.env.PGDATABASE || 'abccart',
 }
 
-const dbPath = path.join(dataDir, 'abccart.db')
-const db = new DatabaseSync(dbPath)
+let pool = null
 
-// Enable foreign keys and WAL mode for reliability
-db.exec('PRAGMA foreign_keys = ON;')
-db.exec('PRAGMA journal_mode = WAL;')
+function getPool() {
+  if (!pool) {
+    pool = process.env.DATABASE_URL
+      ? new Pool({ connectionString: process.env.DATABASE_URL })
+      : new Pool(dbConfig)
+  }
+  return pool
+}
 
-// Unified query wrapper
+function convertPlaceholders(sql) {
+  let idx = 0
+  return sql.replace(/\?/g, () => `$${++idx}`)
+}
+
+function normalizeParams(params = []) {
+  return params.map((p) => (p === undefined ? null : p))
+}
+
+async function ensureDatabaseExists() {
+  if (process.env.DATABASE_URL) return
+
+  const dbName = dbConfig.database
+  if (!/^[a-zA-Z0-9_]+$/.test(dbName)) {
+    throw new Error(`Invalid PostgreSQL database name: ${dbName}`)
+  }
+
+  const adminClient = new Client({
+    host: dbConfig.host,
+    port: dbConfig.port,
+    user: dbConfig.user,
+    password: dbConfig.password,
+    database: 'postgres',
+  })
+
+  await adminClient.connect()
+  try {
+    const existing = await adminClient.query(
+      'SELECT 1 FROM pg_database WHERE datname = $1',
+      [dbName]
+    )
+    if (existing.rowCount === 0) {
+      await adminClient.query(`CREATE DATABASE "${dbName}"`)
+      console.log(`✅ Created PostgreSQL database: ${dbName}`)
+    }
+  } finally {
+    await adminClient.end()
+  }
+}
+
+// Unified async query wrapper (PostgreSQL)
 export const dbWrapper = {
-  query(sql, params = []) {
-    const stmt = db.prepare(sql)
-    return stmt.all(...params)
+  async query(sql, params = []) {
+    const res = await getPool().query(convertPlaceholders(sql), normalizeParams(params))
+    return res.rows
   },
-  get(sql, params = []) {
-    const stmt = db.prepare(sql)
-    return stmt.get(...params)
+  async get(sql, params = []) {
+    const res = await getPool().query(convertPlaceholders(sql), normalizeParams(params))
+    return res.rows[0]
   },
-  run(sql, params = []) {
-    const stmt = db.prepare(sql)
-    return stmt.run(...params)
+  async run(sql, params = []) {
+    let pgSql = convertPlaceholders(sql).trim()
+    if (/^INSERT\b/i.test(pgSql) && !/\bRETURNING\b/i.test(pgSql)) {
+      pgSql = `${pgSql.replace(/;$/, '')} RETURNING id`
+    }
+    const res = await getPool().query(pgSql, normalizeParams(params))
+    return {
+      lastInsertRowid: res.rows[0]?.id ?? 0,
+      changes: res.rowCount ?? 0,
+    }
   },
-  exec(sql) {
-    return db.exec(sql)
+  async exec(sql) {
+    return getPool().query(sql)
   },
 }
 
-export function initDatabase() {
-  const schemaFile = path.join(__dirname, 'schema.sql')
+export async function initDatabase() {
+  await ensureDatabaseExists()
+
+  const schemaFile = path.join(__dirname, 'schema.pg.sql')
   const schema = fs.readFileSync(schemaFile, 'utf8')
-  db.exec(schema)
+  await dbWrapper.exec(schema)
 
   // Seed default roles
-  const roles = dbWrapper.query('SELECT count(*) as count FROM roles')
-  if (roles[0].count === 0) {
-    dbWrapper.run("INSERT INTO roles (name, description) VALUES ('admin', 'System Administrator')")
-    dbWrapper.run("INSERT INTO roles (name, description) VALUES ('customer', 'Verified Store Customer')")
+  const roles = await dbWrapper.query('SELECT COUNT(*) as count FROM roles')
+  if (Number(roles[0].count) === 0) {
+    await dbWrapper.run("INSERT INTO roles (name, description) VALUES ('admin', 'System Administrator')")
+    await dbWrapper.run("INSERT INTO roles (name, description) VALUES ('customer', 'Verified Store Customer')")
   }
 
   // Seed default users (admin & customer)
-  const users = dbWrapper.query('SELECT count(*) as count FROM users')
-  if (users[0].count === 0) {
+  const users = await dbWrapper.query('SELECT COUNT(*) as count FROM users')
+  if (Number(users[0].count) === 0) {
     const adminPass = bcrypt.hashSync('admin123', 10)
     const custPass = bcrypt.hashSync('demo123', 10)
 
-    dbWrapper.run(
+    await dbWrapper.run(
       `INSERT INTO users (name, email, password_hash, mobile, role)
        VALUES (?, ?, ?, ?, ?)`,
       ['ABC Cart Admin', 'admin@abccart.in', adminPass, '9876543210', 'admin']
     )
 
-    dbWrapper.run(
+    await dbWrapper.run(
       `INSERT INTO users (name, email, password_hash, mobile, role)
        VALUES (?, ?, ?, ?, ?)`,
       ['Rahul Sharma', 'customer@abccart.in', custPass, '9812345678', 'customer']
@@ -69,8 +128,8 @@ export function initDatabase() {
   }
 
   // Seed Categories
-  const cats = dbWrapper.query('SELECT count(*) as count FROM categories')
-  if (cats[0].count === 0) {
+  const cats = await dbWrapper.query('SELECT COUNT(*) as count FROM categories')
+  if (Number(cats[0].count) === 0) {
     const categorySeeds = [
       { slug: 'eletronicos', name: 'Electronics', icon: 'package', description: 'Gadgets, audio, computing & accessories', image: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=500&h=500&fit=crop&q=80' },
       { slug: 'moda', name: 'Fashion', icon: 'tag', description: 'Apparel, western & ethnic wear', image: 'https://images.unsplash.com/photo-1489987707025-afc232f7ea0f?w=500&h=500&fit=crop&q=80' },
@@ -83,7 +142,7 @@ export function initDatabase() {
     ]
 
     for (const c of categorySeeds) {
-      dbWrapper.run(
+      await dbWrapper.run(
         'INSERT INTO categories (slug, name, icon, description, image) VALUES (?, ?, ?, ?, ?)',
         [c.slug, c.name, c.icon, c.description, c.image]
       )
@@ -91,16 +150,16 @@ export function initDatabase() {
   }
 
   // Seed Coupons
-  const coupons = dbWrapper.query('SELECT count(*) as count FROM coupons')
-  if (coupons[0].count === 0) {
-    dbWrapper.run('INSERT INTO coupons (code, discount_percent, min_order_amount, active) VALUES (?, ?, ?, ?)', ['WELCOME10', 10, 499, 1])
-    dbWrapper.run('INSERT INTO coupons (code, discount_percent, min_order_amount, active) VALUES (?, ?, ?, ?)', ['ABC20', 20, 999, 1])
-    dbWrapper.run('INSERT INTO coupons (code, discount_percent, min_order_amount, active) VALUES (?, ?, ?, ?)', ['FESTIVE15', 15, 1499, 1])
+  const coupons = await dbWrapper.query('SELECT COUNT(*) as count FROM coupons')
+  if (Number(coupons[0].count) === 0) {
+    await dbWrapper.run('INSERT INTO coupons (code, discount_percent, min_order_amount, active) VALUES (?, ?, ?, ?)', ['WELCOME10', 10, 499, 1])
+    await dbWrapper.run('INSERT INTO coupons (code, discount_percent, min_order_amount, active) VALUES (?, ?, ?, ?)', ['ABC20', 20, 999, 1])
+    await dbWrapper.run('INSERT INTO coupons (code, discount_percent, min_order_amount, active) VALUES (?, ?, ?, ?)', ['FESTIVE15', 15, 1499, 1])
   }
 
   // Seed Sample Orders for Admin Analytics
-  const orders = dbWrapper.query('SELECT count(*) as count FROM orders')
-  if (orders[0].count === 0) {
+  const orders = await dbWrapper.query('SELECT COUNT(*) as count FROM orders')
+  if (Number(orders[0].count) === 0) {
     const sampleOrders = [
       { num: 'ABC-ORD-9021', name: 'Amit Verma', email: 'amit@gmail.com', mobile: '9871122334', subtotal: 4499.00, discount: 449.90, shipping: 0, gst: 728.84, total: 4777.94, status: 'Delivered', method: 'UPI', address: 'B-14, Green Park, New Delhi, Delhi - 110016' },
       { num: 'ABC-ORD-9022', name: 'Priya Iyer', email: 'priya@gmail.com', mobile: '9845012345', subtotal: 2499.00, discount: 0, shipping: 0, gst: 449.82, total: 2948.82, status: 'Shipped', method: 'Credit Card', address: 'Flat 402, Sunrise Apts, Indiranagar, Bengaluru, Karnataka - 560038' },
@@ -110,20 +169,20 @@ export function initDatabase() {
     ]
 
     for (const o of sampleOrders) {
-      const res = dbWrapper.run(
+      const res = await dbWrapper.run(
         `INSERT INTO orders (order_number, user_id, customer_name, customer_email, customer_mobile, subtotal, discount, shipping, gst, total, status, payment_method, payment_status, shipping_address)
          VALUES (?, 2, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Success', ?)`,
         [o.num, o.name, o.email, o.mobile, o.subtotal, o.discount, o.shipping, o.gst, o.total, o.status, o.method, o.address]
       )
       const orderId = Number(res.lastInsertRowid)
 
-      dbWrapper.run(
+      await dbWrapper.run(
         `INSERT INTO order_items (order_id, product_name, price, quantity, color, size, image_url)
          VALUES (?, 'Wireless Electronic Device', ?, 1, 'Black', 'Standard', 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=500&h=500&fit=crop')`,
         [orderId, o.subtotal]
       )
 
-      dbWrapper.run(
+      await dbWrapper.run(
         `INSERT INTO payments (order_id, transaction_id, amount, currency, payment_method, status)
          VALUES (?, ?, ?, 'INR', ?, 'Success')`,
         [orderId, `TXN-${Date.now()}-${orderId}`, o.total, o.method]
@@ -132,18 +191,18 @@ export function initDatabase() {
   }
 
   // Seed sample address for Rahul Sharma
-  const addresses = dbWrapper.query('SELECT count(*) as count FROM addresses')
-  if (addresses[0].count === 0) {
-    dbWrapper.run(
+  const addresses = await dbWrapper.query('SELECT COUNT(*) as count FROM addresses')
+  if (Number(addresses[0].count) === 0) {
+    await dbWrapper.run(
       `INSERT INTO addresses (user_id, full_name, mobile, address_line1, address_line2, landmark, city, state, pin_code, country, is_default)
        VALUES (2, 'Rahul Sharma', '9812345678', 'Flat 304, Green Heights', 'Linking Road, Bandra West', 'Near National College', 'Mumbai', 'Maharashtra', '400050', 'India', 1)`
     )
   }
 
   // Seed Products with INR pricing
-  seedProducts()
+  await seedProducts()
 
-  console.log('✅ Database initialized and seed verified at:', dbPath)
+  console.log(`✅ PostgreSQL database "${dbConfig.database}" initialized and seed verified on ${dbConfig.host}:${dbConfig.port}`)
 }
 
 export default dbWrapper

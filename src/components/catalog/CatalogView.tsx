@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { products as allProducts } from '@/data/products'
+import { useProductsStore } from '@/stores/products'
 import { filterProducts, sortProducts, paginate } from '@/data/query'
 import type { SortKey } from '@/data/types'
 import ProductCard from '@/components/product/ProductCard'
@@ -22,6 +22,13 @@ const PER_PAGE = 9
 
 export default function CatalogView({ fixedCategory, query, initialSort = 'relevance' }: Props) {
   const { t } = useTranslation()
+  const allProducts = useProductsStore((s) => s.products)
+  const fetchProducts = useProductsStore((s) => s.fetchProducts)
+
+  useEffect(() => {
+    fetchProducts()
+  }, [fetchProducts])
+
   const [filters, setFilters] = useState<CatalogFilterState>({
     ...defaultFilters,
     category: fixedCategory ?? '',
@@ -40,7 +47,7 @@ export default function CatalogView({ fixedCategory, query, initialSort = 'relev
       minRating: filters.minRating || undefined,
     })
     return sortProducts(list, sort)
-  }, [filters, sort, fixedCategory, query])
+  }, [allProducts, filters, sort, fixedCategory, query])
 
   const totalPages = Math.ceil(filtered.length / PER_PAGE)
   const current = Math.min(page, Math.max(1, totalPages))

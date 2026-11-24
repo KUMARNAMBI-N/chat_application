@@ -2,6 +2,14 @@ import type { Category } from './types'
 
 export const categories: Category[] = [
   {
+    id: 9,
+    slug: 'mobiles',
+    name: 'Mobiles',
+    icon: 'package',
+    description: 'Flagship, 5G, gaming, foldable, camera & budget smartphones',
+    image: 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=500&h=500&fit=crop&q=80',
+  },
+  {
     id: 1,
     slug: 'eletronicos',
     name: 'Electronics',

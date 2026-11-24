@@ -23,7 +23,7 @@ export default function ProductCard({ product, layout = 'grid' }: Props) {
   const toggleWish = useWishlistStore((s) => s.toggle)
   const isWished = useWishlistStore((s) => s.ids.includes(product.id))
 
-  const image = productImages(product.slug, 1)[0]
+  const image = product.images?.[0] || productImages(product.slug, 1)[0]
   const pct = discountPercent(product.price, product.priceOld)
   const outOfStock = product.stock === 0
 
